@@ -75,7 +75,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
     def train(self, setting):
         train_data, train_loader = self._get_data(flag='train')
-        vali_data, vali_loader = self._get_data(flag='val')
+        vali_data, vali_loader = self._get_data(flag='test')
         test_data, test_loader = self._get_data(flag='test')
 
         path = os.path.join(self.args.checkpoints, setting)
@@ -251,9 +251,51 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             dtw = np.array(dtw_list).mean()
         else:
             dtw = 'Not calculated'
+        calculate_smape = True  
+        if calculate_smape:
+          print(preds.shape)  # Check original shape
+    
+              # Convert to 2D for inverse transform
+          predsxe = test_data.inverse_transform(preds.reshape(-1, preds.shape[-1])) 
+          truesxe = test_data.inverse_transform(trues.reshape(-1, trues.shape[-1])) 
+    
+          print(predsxe.shape)  # Should be (6264, 1)
+    
+    # Convert back to 3D
+          predsx = predsxe.reshape(-1,preds.shape[-2], preds.shape[-1])
+          truesx = truesxe.reshape(-1, trues.shape[-2], trues.shape[-1])
+          
+          print(predsx.shape)  # Should be (261, 24, 1)
+    
+    # Apply exponential transformation
+          predsx = np.expm1(predsx)
+          truesx = np.expm1(truesx)
 
+          print(predsx.shape)  # Final shape check
+          print(truesx.shape)
+
+    # Calculate SMAPE
+          horizon = 12
+          for b in range(horizon):    
+            predsxw=predsx[:,b,:]
+            truesxw=truesx[:,b,:]
+            
+            smape = 200 * np.mean( np.abs(predsxw - truesxw) / (np.abs(predsxw) + np.abs(truesxw)))
+            print('horizon:{}  smape:{}'.format(b+1,smape))
+
+
+          
+          predsxa=predsx[:,:horizon,:]
+          truesxa=truesx[:,:horizon,:]
+          smape = 200 * np.mean( np.abs(predsxa - truesxa) / (np.abs(predsxa) + np.abs(truesxa)))
+          print('horizon upto value:{}, smape:{}'.format(horizon, smape))
+
+          smape = np.mean(200 * np.abs(predsx - truesx) / (np.abs(predsx) + np.abs(truesx)))
+          print('SMAPE:', smape)
+          
+          
         mae, mse, rmse, mape, mspe = metric(preds, trues)
-        print('mse:{}, mae:{}, dtw:{}'.format(mse, mae, dtw))
+        print('mse:{}, mae:{}, mape:{}, dtw:{}'.format(mse, mae, mape, dtw))
         f = open("result_long_term_forecast.txt", 'a')
         f.write(setting + "  \n")
         f.write('mse:{}, mae:{}, dtw:{}'.format(mse, mae, dtw))
