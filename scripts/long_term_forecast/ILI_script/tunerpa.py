@@ -1,53 +1,21 @@
 import random
 import subprocess
 import csv
-from collections import defaultdict
 from copy import deepcopy
 import os
-
-# Corrected log path resolution
-
-def extract_metrics_from_log():
-    smape = mae = mse = None
-    script_dir = os.path.dirname(__file__)
-    log_path = os.path.abspath(os.path.join(script_dir, "../../../result_long_term_forecast.txt"))
-
-    if not os.path.exists(log_path):
-        return 0.0, 0.0, 0.0
-
-    with open(log_path, 'r') as f:
-        lines = f.readlines()
-        for line in lines[::-1]:  # reverse search to find latest values first
-            if "Total_SMAPE:" in line:
-                smape = float(line.strip().split(":")[-1])
-            elif "MAE:" in line:
-                mae = float(line.strip().split(":")[-1])
-            elif "MSE:" in line:
-                mse = float(line.strip().split(":")[-1])
-            if smape is not None and mae is not None and mse is not None:
-                break
-
-    if smape is None or mae is None or mse is None:
-        return 0.0, 0.0, 0.0
-
-    return smape, mae, mse
-
-search_space = {
-    "seq_len": [36, 48, 60, 72, 84, 96, 108, 120, 134, 146],
-    "e_layers": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    "n_heads": [2, 4, 6, 8],
-    "d_ff": [512, 1024, 2048],
-    "d_model": [512, 1024, 2048],
-    "learning_rate": [0.0001, 0.00001, 0.001],
-    "batch_size": [16, 32]
-}
+import re
+# --- Filter thresholds ---
+HORIZON_1_LIMIT = 11.99
+HORIZON_ALL_LIMIT = 39.99
+TOTAL_SMAPE_LIMIT = 30
 
 results_file = "tuning_results.csv"
-value_scores = defaultdict(lambda: defaultdict(list))
 
+# --- Sample a random config ---
 def sample_random_config(space):
     return {param: random.choice(values) for param, values in space.items()}
 
+# --- Generate neighbors by changing one hyperparameter ---
 def get_neighbors(config, space):
     neighbors = []
     for param in config:
@@ -61,6 +29,77 @@ def get_neighbors(config, space):
                 neighbors.append(new_config)
     return neighbors
 
+def extract_latest_metrics():
+    log_path = "/content/PatchTST-AutoTuner2Muga/result_long_term_forecast.txt"
+
+    if not os.path.exists(log_path):
+        return None, None, None, None
+
+    with open(log_path, 'r') as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    # Extract last block of output (between "setting" lines)
+    blocks = []
+    block = []
+    for line in lines:
+        if line.lower().startswith("setting"):
+            if block:
+                blocks.append(block)
+                block = []
+        block.append(line)
+    if block:
+        blocks.append(block)
+
+    if not blocks:
+        return None, None, None, None
+
+    # Take the last full block
+    last_block = blocks[-1]
+
+    horizon_smapes = []
+    total_smape = mae = mse = None
+
+    for line in last_block:
+        if line.startswith("horizon:"):
+            try:
+                val = float(line.split("smape:")[-1])
+                horizon_smapes.append(val)
+            except:
+                pass
+        elif "Total_SMAPE:" in line or "Overall SMAPE:" in line or "SMAPE:" in line:
+            try:
+                total_smape = float(line.split(":")[-1])
+            except:
+                pass
+        
+
+
+        elif "mse:" in line.lower() and "mae:" in line.lower():
+             try:
+                mse_match = re.search(r"mse:([\d\.]+)", line, re.IGNORECASE)
+                mae_match = re.search(r"mae:([\d\.]+)", line, re.IGNORECASE)
+                if mse_match:
+                     mse = float(mse_match.group(1))
+                if mae_match:
+                     mae = float(mae_match.group(1))
+             except:
+               pass
+        
+    return horizon_smapes, total_smape, mae, mse
+
+# --- Filter condition check ---
+def is_valid(horizon_smapes, total_smape):
+    if not horizon_smapes or len(horizon_smapes) < 12:
+        return False
+    if horizon_smapes[0] > HORIZON_1_LIMIT:
+        return False
+    if any(h > HORIZON_ALL_LIMIT for h in horizon_smapes):
+        return False
+    if total_smape is None or total_smape > TOTAL_SMAPE_LIMIT:
+        return False
+    return True
+
+# --- Train model and apply filtering ---
 def train_patchtst(config):
     model_id = f"ili_{config['seq_len']}_12_el{config['e_layers']}_nh{config['n_heads']}_dm{config['d_model']}_df{config['d_ff']}"
     script_dir = os.path.dirname(__file__)
@@ -93,60 +132,71 @@ def train_patchtst(config):
         "--d_ff", str(config["d_ff"]),
         "--learning_rate", str(config["learning_rate"]),
         "--batch_size", str(config["batch_size"]),
+        "--patch_size", str(config["patch_size"]),
+        "--stride", str(config["stride"]),
         "--itr", "1"
     ]
     subprocess.run(cmd, cwd=project_root)
-    return extract_metrics_from_log()
+    print(f"\n[Running Config] Patch Size: {config['patch_size']}, Stride: {config['stride']}")
 
-def prune_search_space(search_space, value_scores, threshold=0.15, min_trials=3):
-    for param in list(search_space.keys()):
-        all_scores = [s for v in value_scores[param].values() for s in v]
-        if len(all_scores) < 10:
-            continue
-        global_avg = sum(all_scores) / len(all_scores)
-        for val in list(search_space[param]):
-            scores = value_scores[param][val]
-            if len(scores) < min_trials:
-                continue
-            avg_score = sum(scores) / len(scores)
-            if avg_score > global_avg + threshold:
-                print(f"Pruned {param}={val} (avg SMAPE: {avg_score:.3f})")
-                search_space[param].remove(val)
+    # Extract and filter
+    horizon_smapes, total_smape, mae, mse = extract_latest_metrics()
+    if is_valid(horizon_smapes, total_smape):
+        return total_smape, mae, mse
+    return None, None, None
 
-def log_result(score, config, smape, mae, mse):
+# --- Log results to CSV ---
+def log_result(score, config, mae, mse):
     with open(results_file, "a", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([score, config, smape, mae, mse])
+        writer.writerow([score, config, mae, mse])
 
-def run_autotuner(n_random=30, greedy=True, prune=True):
+# --- Main tuning loop ---
+def run_autotuner(n_random=30, greedy=True):
     trials = []
+
+    # Random Search
     for trial in range(n_random):
         config = sample_random_config(search_space)
-        if config["d_model"] == config["d_ff"]:
+        if config["stride"] >= config["patch_size"]:
             continue
         smape, mae, mse = train_patchtst(config)
-        score = smape
-        trials.append((score, config))
-        for k, v in config.items():
-            value_scores[k][v].append(score)
-        log_result(score, config, smape, mae, mse)
-        if prune and trial > 10 and trial % 5 == 0:
-            prune_search_space(search_space, value_scores)
+        if smape is not None:
+            trials.append((smape, config))
+            log_result(smape, config, mae, mse)
 
+    # Greedy Search on Neighbors
     if greedy:
         top_configs = sorted(trials, key=lambda x: x[0])[:5]
         for base_score, base_config in top_configs:
             neighbors = get_neighbors(base_config, search_space)
             for neighbor in neighbors:
-                if neighbor["d_model"] == neighbor["d_ff"]:
+                if neighbor["stride"] >= neighbor["patch_size"]:
                     continue
                 smape, mae, mse = train_patchtst(neighbor)
-                score = smape
-                trials.append((score, neighbor))
-                log_result(score, neighbor, smape, mae, mse)
+                if smape is not None:
+                    trials.append((smape, neighbor))
+                    log_result(smape, neighbor, mae, mse)
 
-    best_trial = min(trials, key=lambda x: x[0])
-    print(f"\n✅ Best SMAPE: {best_trial[0]:.4f} with config: {best_trial[1]}")
+    if trials:
+        best_trial = min(trials, key=lambda x: x[0])
+        print(f"\n✅ Best SMAPE: {best_trial[0]:.4f} with config: {best_trial[1]}")
+    else:
+        print("\n❌ No valid configurations found after filtering.")
 
+# --- Search space ---
+search_space = {
+    "seq_len": [48,146],
+    "e_layers": [4],
+    "n_heads": [8],
+    "d_ff": [2048],
+    "d_model": [1024],
+    "learning_rate": [0.0001],
+    "batch_size": [32],
+    "patch_size": [12, 16, 18, 20, 24],
+    "stride": [4, 10, 12, 14]
+}
+
+# --- Entry Point ---
 if __name__ == "__main__":
     run_autotuner()

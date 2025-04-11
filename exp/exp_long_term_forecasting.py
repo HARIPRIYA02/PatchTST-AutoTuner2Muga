@@ -275,33 +275,40 @@ class Exp_Long_Term_Forecast(Exp_Basic):
           print(truesx.shape)
 
     # Calculate SMAPE
-          horizon = 12
-          for b in range(horizon):    
-            predsxw=predsx[:,b,:]
-            truesxw=truesx[:,b,:]
-            
-            smape = 200 * np.mean( np.abs(predsxw - truesxw) / (np.abs(predsxw) + np.abs(truesxw)))
-            print('horizon:{}  smape:{}'.format(b+1,smape))
+        horizon = 12
+        smape_list = []
 
+        with open("result_long_term_forecast.txt", 'a') as f:
+           f.write(setting + "\n")
 
-          
-          predsxa=predsx[:,:horizon,:]
-          truesxa=truesx[:,:horizon,:]
-          smape = 200 * np.mean( np.abs(predsxa - truesxa) / (np.abs(predsxa) + np.abs(truesxa)))
-          print('horizon upto value:{}, smape:{}'.format(horizon, smape))
+    # Horizon-wise SMAPE
+           for b in range(horizon):    
+              predsxw = predsx[:, b, :]
+              truesxw = truesx[:, b, :]
+              smape = 200 * np.mean(np.abs(predsxw - truesxw) / (np.abs(predsxw) + np.abs(truesxw) + 1e-8))
+              smape_list.append(smape)
+              print(f'horizon:{b+1}  smape:{smape:.4f}')
+              f.write(f'horizon:{b+1}  smape:{smape:.4f}\n')
 
-          smape = np.mean(200 * np.abs(predsx - truesx) / (np.abs(predsx) + np.abs(truesx)))
-          print('SMAPE:', smape)
-          
-          
-        mae, mse, rmse, mape, mspe = metric(preds, trues)
-        print('mse:{}, mae:{}, mape:{}, dtw:{}'.format(mse, mae, mape, dtw))
-        f = open("result_long_term_forecast.txt", 'a')
-        f.write(setting + "  \n")
-        f.write('mse:{}, mae:{}, dtw:{}'.format(mse, mae, dtw))
-        f.write('\n')
-        f.write('\n')
-        f.close()
+    # SMAPE for full horizon
+           predsxa = predsx[:, :horizon, :]
+           truesxa = truesx[:, :horizon, :]
+           smape_all_horizons = 200 * np.mean(np.abs(predsxa - truesxa) / (np.abs(predsxa) + np.abs(truesxa) + 1e-8))
+           print(f'horizon upto value:{horizon}, smape:{smape_all_horizons:.4f}')
+           f.write(f'horizon upto value:{horizon}, smape:{smape_all_horizons:.4f}\n')
+
+    # Overall SMAPE
+           overall_smape = 200 * np.mean(np.abs(predsx - truesx) / (np.abs(predsx) + np.abs(truesx) + 1e-8))
+           print(f'SMAPE: {overall_smape:.4f}')
+           f.write(f'Overall SMAPE: {overall_smape:.4f}\n')
+
+    # Final metrics
+           mae, mse, rmse, mape, mspe = metric(preds, trues)
+           print(f'mse:{mse:.4f}, mae:{mae:.4f}')
+           f.write(f'mse:{mse:.4f}, mae:{mae:.4f}\n')
+           f.write('\n')
+           f.write('\n')
+           f.close()
 
         np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
         np.save(folder_path + 'pred.npy', preds)

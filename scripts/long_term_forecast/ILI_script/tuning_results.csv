@@ -1,1 +1,1 @@
-0.0,"{'seq_len': 108, 'e_layers': 8, 'n_heads': 4, 'd_ff': 512, 'd_model': 2048, 'learning_rate': 1e-05, 'batch_size': 32}",0.0,0.0,0.0
+26.8373,"{'seq_len': 48, 'e_layers': 4, 'n_heads': 8, 'd_ff': 2048, 'd_model': 1024, 'learning_rate': 0.0001, 'batch_size': 32, 'patch_size': 12, 'stride': 10}",0.3835,0.3113
